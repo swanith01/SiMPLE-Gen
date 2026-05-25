@@ -20,13 +20,13 @@ from scipy import special
 from scipy.interpolate import interp1d
 from astropy import units as u
 from astropy.constants import c, m_p, m_e, k_B
-from astropy.cosmology import Planck18 as cosmo
+
 import time
 
 from .config import PATHS
 
 
-def tau(x, z, n_HI, T, v_pec):
+def tau(x, z, n_HI, T, v_pec, cosmo):
     """
     Optical depth τ as a function of LOS pixel index (returned array is (N_halo, N_x)).
     Mirrors your original expression and the batch script behavior.
@@ -61,7 +61,7 @@ def tau(x, z, n_HI, T, v_pec):
     return tau_z
 
 
-def run_spec():
+def run_spec(cosmo):
     # ── Load sightline data ───────────────────────────────────────
     n_HI_halo  = np.load(PATHS["n_HI_halo"])   # (N_halo, N_x)
     T_halo     = np.load(PATHS["T_halo"])      # (N_halo, N_x)
@@ -123,7 +123,7 @@ def run_spec():
         n_HI_sec[mask] = 0.0
 
         # compute τ along LOS grid (returns (chunk_halos, N_x_new))
-        F_halo_los = tau(x_sim_new, z_new, n_HI_sec, T_sec, v_pec_sec)
+        F_halo_los = tau(x_sim_new, z_new, n_HI_sec, T_sec, v_pec_sec, cosmo)
 
         # convert z grid to velocity grid for each halo (same formula)
         z_rep = np.repeat(z_new[np.newaxis, :], repeats=(end - start), axis=0)

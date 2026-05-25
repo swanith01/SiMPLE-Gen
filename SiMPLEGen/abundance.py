@@ -11,13 +11,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from hmf import MassFunction
 from scipy.interpolate import interp1d
-from astropy.cosmology import Planck18 as cosmo
 
-from .config import PATHS, Z_REDSHIFT
 
-def run_abundance():
+from . import config
+from .config import PATHS
+
+def run_abundance(cosmo):
     # ── Parameters ────────────────────────────────────────────────────────
-    Redshift   = Z_REDSHIFT
+    Redshift   = config.Z_REDSHIFT
     Halo_Mmin  = 8.0    # log10(M_min / (M⊙/h))
     Halo_Mmax  = 15.0   # log10(M_max / (M⊙/h))
     dlog10m    = 0.1
@@ -25,6 +26,7 @@ def run_abundance():
     # ── Step 1: Halo Mass Function (Sheth–Tormen) ─────────────────────────
     mf = MassFunction(
         hmf_model="SMT",
+        cosmo_model=cosmo,
         z=Redshift,
         Mmin=Halo_Mmin,
         Mmax=Halo_Mmax,
@@ -57,6 +59,7 @@ def run_abundance():
     deltaz = 0.39
     mf_prev = MassFunction(
         hmf_model="SMT",
+        cosmo_model = cosmo, 
         z=Redshift + deltaz,
         Mmin=Halo_Mmin,
         Mmax=Halo_Mmax,

@@ -3,23 +3,21 @@ import os
 
 PACKAGE_DIR = os.path.abspath(os.path.dirname(__file__))
 
-# ── INPUT FILES ───────────────────────────────────────────────
-# Point this at wherever your raw .npy or .dat files live.
-INPUT_DIR = "/home/soumak/My_Files/Test_Sim/seed1000_MTURN9.0_FESC-1.00_z7.14"
+# ── RUNTIME-CONFIGURED PARAMS (set by driver via env vars) ────
+# All have sensible defaults so config can still be imported standalone.
+SEED    = int(os.environ.get("SIMPLEGEN_SEED",     "1"))
+BOX_LEN = float(os.environ.get("SIMPLEGEN_BOX_LEN", "400.0"))   # cMpc
+HII_DIM = int(os.environ.get("SIMPLEGEN_HII_DIM",   "32"))
+MH_CUT  = float(os.environ.get("SIMPLEGEN_MH_CUT",  "8.5"))     # log10(M/Msun)
 
-GRID_TAG = "017"
+# ── LIGHTCONE INPUT PATHS ─────────────────────────────────────
+HALO_CATALOGUE_DIR = os.environ.get(
+    "SIMPLEGEN_HALO_DIR",
+    f"/user1/swanith/lightcone_halos/catalogues/seed_{SEED}",
+)
 
-RAW = {
-    "density_cube":     os.path.join(INPUT_DIR, f"density_grid_{GRID_TAG}.npy"),
-    "temperature":      os.path.join(INPUT_DIR, f"temperature_grid_{GRID_TAG}.npy"),
-    "ionization_cube":  os.path.join(INPUT_DIR, f"xHII_grid_{GRID_TAG}.npy"),
-    "velocity":         os.path.join(INPUT_DIR, f"velocity_vx_grid_{GRID_TAG}.npy"),
-    "halo_positions":   os.path.join(INPUT_DIR, f"halo_coords_grid_{GRID_TAG}.npy"),
-    "halo_masses":      os.path.join(INPUT_DIR, f"halo_masses_grid_{GRID_TAG}.npy"),
-}
-
-# ── OUTPUT FILES ──────────────────────────────────────────────
-DATA_DIR = os.path.join(PACKAGE_DIR, "data")
+# ── OUTPUT FILES (per seed) ───────────────────────────────────
+DATA_DIR = os.path.join(PACKAGE_DIR, "data", f"seed_{SEED}")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 PATHS = {
@@ -31,13 +29,18 @@ PATHS = {
     "z_grid":      os.path.join(DATA_DIR, "z_grid.npy"),
     "tau_halo":    os.path.join(DATA_DIR, "tau_halo.npy"),
     "Muv_grid":    os.path.join(DATA_DIR, "Muv_grid.npy"),
-    "LLya_grid":    os.path.join(DATA_DIR, "LLya_grid.npy"),
+    "LLya_grid":   os.path.join(DATA_DIR, "LLya_grid.npy"),
     "REW_grid":    os.path.join(DATA_DIR, "REW_grid.npy"),
-    "damping":    os.path.join(DATA_DIR, "damping.npy"),
+    "damping":     os.path.join(DATA_DIR, "damping.npy"),
+    "halo_coords": os.path.join(DATA_DIR, "halo_coords.npy"),
+    "halo_z":      os.path.join(DATA_DIR, "halo_z.npy"),
 }
 
-# ── GLOBAL PARAMS ─────────────────────────────────────────────
-Z_REDSHIFT = 7.14
-MH_CUT     = 9.5
-BOX_SIZE   = 80.0    # Mpc/h, used to build x_sim
-
+# ── PER-SNAPSHOT REDSHIFT ─────────────────────────────────────
+# MUST be set by the driver via:
+#   import SiMPLEGen.config as cfg
+#   cfg.Z_REDSHIFT = float(z_node)
+# before each call to run_abundance() / run_assign().
+# Left as None so a forgotten override crashes loudly instead of
+# silently using a stale value.
+Z_REDSHIFT = None

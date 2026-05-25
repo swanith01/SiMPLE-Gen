@@ -10,7 +10,8 @@ Monte Carlo sampling of your P_LLya and P_REW distributions.
 """
 import numpy as np
 
-from .config import PATHS, Z_REDSHIFT
+from . import config
+from .config import PATHS
 
 def P_REW(Muv, z):
     """
@@ -65,7 +66,7 @@ def P_LLya(Muv, z):
 def run_assign():
     # ── load Muv array from abundance matching ────────────────────────────
     Muv = np.load(PATHS["Muv_grid"])   # shape (N_halo,)
-    z_sim = Z_REDSHIFT
+    z_sim = config.Z_REDSHIFT
 
     N = len(Muv)
     LLya = np.zeros(N, dtype=np.float64)

@@ -11,7 +11,8 @@ and measuring the fractional area suppression.
 import numpy as np
 from scipy.stats import norm
 
-from .config import PATHS, Z_REDSHIFT
+from . import config
+from .config import PATHS
 
 def run_damping():
     # ── Load inputs ────────────────────────────────────────────────
@@ -21,7 +22,7 @@ def run_damping():
     halomass = np.load(PATHS["halomass"])
     # Muv: not strictly used here, but loaded if needed downstream
     Muv = np.load(PATHS["Muv_grid"])
-    z = Z_REDSHIFT
+    z = config.Z_REDSHIFT
 
     # ── Compute circular velocity for each halo [km/s] ─────────────
     # v_c = 142.85 * [0.3*(1+z)^3 + 0.7]^(1/3) * (M_h/1e12)^(1/3)
