@@ -102,7 +102,7 @@ def main():
     print(f"  loaded lightcone: {len(lightcone.lightcone_redshifts)} slices")
 
     # ── cosmology (match cell 1) ───────────────────────────────────
-    cosmo = FlatLambdaCDM(H0=67.77, Om0=0.3086)
+    cosmo = FlatLambdaCDM(H0=67.77, Om0=0.3086,Ob0=0.0489, Tcmb0=2.7255)
 
     # ── run the SiMPLE-Gen pipeline ────────────────────────────────
     run_pipeline(lightcone, lightconer, inputs, cosmo=cosmo)

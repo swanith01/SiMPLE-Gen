@@ -78,7 +78,7 @@ def run_pipeline(lightcone, lightconer, inputs, cosmo=None):
     lo = i_center - N_CELLS // 2
     hi = i_center + N_CELLS // 2
 
-    # ── snapshot list ──────────────────────────────────────────────
+    # ── node catalogue list ────────────────────────────────────────
     halo_files = sorted(
         [f for f in os.listdir(HALO_CATALOGUE_DIR)
          if f.startswith('masses')],
@@ -89,58 +89,100 @@ def run_pipeline(lightcone, lightconer, inputs, cosmo=None):
         for f in halo_files
     ])
 
+    # ──────────────────────────────────────────────────────────────────
+    # DENSE LIGHTCONE (Option-A port from halo_lightcone_worker.py)
+    #
+    # The old loop iterated over the ~63 node catalogues and processed ONE
+    # slab per node (z_idx = argmin), leaving every other LC slice empty —
+    # hence the striped LAE lightcone.  Here we instead iterate over EVERY
+    # LC slice (n_los of them).  Each slice is assigned to its nearest node
+    # in comoving distance, and its own one-cell slab is derived from that
+    # node's full-box catalogue.  All 32 slabs of each box get LAEfied, one
+    # slab at a time, so the LAE lightcone fills continuously.
+    #
+    # node catalogues are loaded lazily and cached one-at-a-time (LC slices
+    # are processed in redshift order, so consecutive slices usually share
+    # a node — at most one node catalogue is held in memory).
+    # ──────────────────────────────────────────────────────────────────
+    node_dc = np.array(
+        [cosmo.comoving_distance(zn).to_value('Mpc')
+         for zn in node_z_sorted], dtype=np.float64)
+    lc_dc   = np.array(lightcone.lightcone_distances.to_value('Mpc'),
+                       dtype=np.float64)
+    # owner[z_idx] = index into node_z_sorted
+    slice_owner = np.argmin(
+        np.abs(lc_dc[:, None] - node_dc[None, :]), axis=1)
+
     # ── output dirs ────────────────────────────────────────────────
     out_dir  = os.path.join(os.path.dirname(PATHS["halomass"]),
                             "lightcone_lae")
     snap_dir = os.path.join(out_dir, "snapshots")
     os.makedirs(snap_dir, exist_ok=True)
 
-    print(f"\n  {len(node_z_sorted)} snapshots to process")
+    print(f"\n  {n_los} LC slices to process "
+          f"(over {len(node_z_sorted)} node catalogues)")
     print(f"  LoS window: {N_CELLS} cells centred on halo  "
           f"({N_CELLS * cell_size_mpc:.1f} cMpc)")
     print(f"  checkpoints → {snap_dir}\n")
 
-    # ── per-snapshot loop ──────────────────────────────────────────
-    for snap_i, z_node in enumerate(node_z_sorted):
+    # one-node-at-a-time catalogue cache
+    _cache = {"node": -1, "masses": None, "coords": None}
+
+    def _load_node(node_idx):
+        """Load + mass-cut a node's full-box catalogue, caching the last one."""
+        if _cache["node"] == node_idx:
+            return _cache["masses"], _cache["coords"]
+        z_node = node_z_sorted[node_idx]
+        tag    = f"z{z_node:.4f}"
+        m = np.load(os.path.join(HALO_CATALOGUE_DIR, f"masses_{tag}.npy"))
+        c = np.load(os.path.join(HALO_CATALOGUE_DIR, f"coords_{tag}.npy"))
+        keep = m >= 10.0**MH_CUT
+        _cache.update(node=node_idx, masses=m[keep], coords=c[keep])
+        return _cache["masses"], _cache["coords"]
+
+    # ── per-LC-slice loop ──────────────────────────────────────────
+    for z_idx in range(n_los):
+
+        node_idx = int(slice_owner[z_idx])
+        z_node   = float(node_z_sorted[node_idx])
+        # z_slice = this LC slice's TRUE lightcone redshift. The slice's halo
+        # SLAB is drawn from the owning node's box (z_node), but the slice
+        # itself physically sits at z_slice. All slice physics (z_grid for tau,
+        # cfg.Z_REDSHIFT, nH_mean) and the redshifts.npy label use z_slice.
+        # z_node survives only as a node property: catalogue + checkpoint names.
+        z_slice  = float(z_lc[z_idx])
 
         ckpt = os.path.join(snap_dir,
-                            f"snap_{snap_i:03d}_z{z_node:.4f}.npz")
+                            f"snap_{z_idx:04d}_z{z_node:.4f}.npz")
 
-        # ── skip if this snapshot already checkpointed ─────────────
+        # ── skip if this LC slice already checkpointed ─────────────
         if os.path.exists(ckpt):
-            print(f"── Snapshot {snap_i+1}/{len(node_z_sorted)}  "
-                  f"z={z_node:.4f} ── already done, skipping")
+            print(f"── LC slice {z_idx+1}/{n_los}  "
+                  f"z_node={z_node:.4f} ── already done, skipping")
             continue
 
-        print(f"── Snapshot {snap_i+1}/{len(node_z_sorted)}  "
-              f"z={z_node:.4f} ──")
+        print(f"── LC slice {z_idx+1}/{n_los}  "
+              f"z_slice={z_slice:.4f}  (node {node_idx}, "
+              f"z_node={z_node:.4f}) ──")
 
-        # find lightcone slice index and matching z-cell
-        z_idx  = np.argmin(np.abs(z_lc - z_node))
+        # this slice's one-cell slab within the owning node's box
         lcidx  = int((lcpix.max() - lcpix[z_idx] + 1 * pixel)
                      .to_value(pixel))
         z_cell = (-lcidx + lightconer.index_offset) % HII_DIM
         z_lo   = z_cell * cell_size_mpc
         z_hi   = z_lo + cell_size_mpc
 
-        # load and filter catalogue
-        tag    = f"z{z_node:.4f}"
-        masses = np.load(os.path.join(HALO_CATALOGUE_DIR,
-                                       f"masses_{tag}.npy"))
-        coords = np.load(os.path.join(HALO_CATALOGUE_DIR,
-                                       f"coords_{tag}.npy"))
+        # load owning node's full-box catalogue (cached) and slab-filter
+        masses_box, coords_box = _load_node(node_idx)
 
-        mass_mask = masses >= 10.0**MH_CUT
-        masses    = masses[mass_mask]
-        coords    = coords[mass_mask]
-
-        depth_mask = (coords[:, 2] >= z_lo) & (coords[:, 2] < z_hi)
-        masses     = masses[depth_mask]
-        coords     = coords[depth_mask]
+        depth_mask = ((coords_box[:, 2] >= z_lo) &
+                      (coords_box[:, 2] < z_hi))
+        masses     = masses_box[depth_mask]
+        coords     = coords_box[depth_mask]
 
         if len(masses) == 0:
             print(f"  no halos in slab — writing empty checkpoint\n")
-            np.savez(ckpt, empty=True, z_node=z_node)
+            np.savez(ckpt, empty=True, z_node=z_node, z_slice=z_slice)
             continue
 
         print(f"  halos={len(masses):,}  z_cell={z_cell}  "
@@ -165,9 +207,9 @@ def run_pipeline(lightcone, lightconer, inputs, cosmo=None):
         dens_snap = dens_snap.astype(np.float32)
 
         # unit conversion 1: xHI → n_HI [cm^-3]
-        rho_crit = cosmo.critical_density(z_node).to(u.g/u.cm**3).value
+        rho_crit = cosmo.critical_density(z_slice).to(u.g/u.cm**3).value
         Ob       = cosmo.Ob0
-        nH_mean  = (rho_crit * Ob * (1 + z_node)**3) / M_PROTON
+        nH_mean  = (rho_crit * Ob * (1 + z_slice)**3) / M_PROTON
         nHI_snap = nH_mean * (1 + dens_snap) * xHI_snap
 
         # unit conversion 2: vz Mpc/s → km/s
@@ -178,13 +220,13 @@ def run_pipeline(lightcone, lightconer, inputs, cosmo=None):
         BOX_SIZE_mph = BOX_LEN * h
         x_sim_snap   = np.linspace(0, BOX_SIZE_mph, N_CELLS + 1)[:-1]
 
-        # z_grid: analytic, centred on z_node at i_center
-        H_z  = cosmo.H(z_node).to(u.km/u.s/u.Mpc).value
+        # z_grid: analytic, centred on z_slice at i_center
+        H_z  = cosmo.H(z_slice).to(u.km/u.s/u.Mpc).value
         dzdx = H_z / c_light.to(u.km/u.s).value
 
         z_grid_snap = np.zeros(N_CELLS)
         mid         = N_CELLS // 2
-        z_grid_snap[mid] = z_node
+        z_grid_snap[mid] = z_slice
         for i in range(mid - 1, -1, -1):
             z_grid_snap[i] = (z_grid_snap[i+1]
                               - (x_sim_snap[i+1] - x_sim_snap[i]) * dzdx)
@@ -193,7 +235,7 @@ def run_pipeline(lightcone, lightconer, inputs, cosmo=None):
                               + (x_sim_snap[i] - x_sim_snap[i-1]) * dzdx)
 
         # set runtime redshift BEFORE any pipeline step
-        cfg.Z_REDSHIFT = float(z_node)
+        cfg.Z_REDSHIFT = float(z_slice)
 
         # write scratch arrays for the pipeline steps
         np.save(PATHS["n_HI_halo"],  nHI_snap)
@@ -229,6 +271,7 @@ def run_pipeline(lightcone, lightconer, inputs, cosmo=None):
             ckpt,
             empty     = False,
             z_node    = z_node,
+            z_slice   = z_slice,
             tau       = tau_snap,
             Muv       = Muv_snap,
             LLya      = LLya_snap,
@@ -241,17 +284,19 @@ def run_pipeline(lightcone, lightconer, inputs, cosmo=None):
               f"{tau_snap.max():.2e}  → checkpoint saved\n")
 
     # ── assemble full catalogue from checkpoints ───────────────────
-    print("All snapshots done — assembling full catalogue from "
+    print("All LC slices done — assembling full catalogue from "
           "checkpoints...")
 
     all_tau, all_Muv, all_LLya, all_REW          = [], [], [], []
     all_damping, all_mass, all_coords, all_z     = [], [], [], []
 
-    for snap_i, z_node in enumerate(node_z_sorted):
+    for z_idx in range(n_los):
+        node_idx = int(slice_owner[z_idx])
+        z_node   = float(node_z_sorted[node_idx])
         ckpt = os.path.join(snap_dir,
-                            f"snap_{snap_i:03d}_z{z_node:.4f}.npz")
+                            f"snap_{z_idx:04d}_z{z_node:.4f}.npz")
         if not os.path.exists(ckpt):
-            print(f"  ! missing checkpoint for snap {snap_i} "
+            print(f"  ! missing checkpoint for LC slice {z_idx} "
                   f"z={z_node:.4f} — skipping")
             continue
         d = np.load(ckpt)
@@ -264,7 +309,7 @@ def run_pipeline(lightcone, lightconer, inputs, cosmo=None):
         all_damping.append(d["damping"])
         all_mass.append(d["halomass"])
         all_coords.append(d["coords"])
-        all_z.append(np.full(len(d["halomass"]), z_node,
+        all_z.append(np.full(len(d["halomass"]), float(d["z_slice"]),
                              dtype=np.float32))
 
     if len(all_mass) == 0:
